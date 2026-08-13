@@ -1,9 +1,24 @@
 from fastapi.testclient import TestClient
 
+import os
+
+os.environ["APP_USERNAME"] = "sreenivasulu-s"
+os.environ["APP_PASSWORD"] = "test-password-for-pytest"
+
+
 from backend.main import app
 
 
-client = TestClient(app)
+import base64
+
+_TEST_AUTH = base64.b64encode(
+    b"sreenivasulu-s:test-password-for-pytest"
+).decode()
+
+client = TestClient(
+    app,
+    headers={"Authorization": f"Basic {_TEST_AUTH}"},
+)
 
 
 def test_health_check():
