@@ -76,6 +76,7 @@ function App() {
   const [error, setError] = useState('')
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+const targetConfig = TARGET_CONFIG[targetType]
 
   async function loadHistory() {
     setHistoryLoading(true)
@@ -380,10 +381,11 @@ function App() {
           </select>
 
           <input
-            type="url"
+            type={targetConfig.type}
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder="http://127.0.0.1:8000"
+            placeholder={targetConfig.placeholder}
+            aria-label={targetConfig.label}
             required
           />
 
