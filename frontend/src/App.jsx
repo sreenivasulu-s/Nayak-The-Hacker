@@ -2,6 +2,36 @@ import { useEffect, useState } from 'react'
 import './App.css'
 const API_BASE = 'http://127.0.0.1:8000'
 const STORAGE_KEY = 'vuln-scanner-scan-id'
+let authHeader = null
+
+async function apiFetch(url, options = {}) {
+  if (!authHeader) {
+    const username = window.prompt('Nayak The Hacker username:')
+    const password = window.prompt('Nayak The Hacker password:')
+
+    if (!username || password === null) {
+      throw new Error('Authentication required')
+    }
+
+    authHeader = `Basic ${btoa(`${username}:${password}`)}`
+  }
+
+  const headers = new Headers(options.headers || {})
+  headers.set('Authorization', authHeader)
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  })
+
+  if (response.status === 401) {
+    authHeader = null
+    throw new Error('Invalid username or password')
+  }
+
+  return response
+}
+
 const TARGET_CONFIG = {
   web: {
     label: 'Web Application',
@@ -51,7 +81,7 @@ function App() {
     setHistoryLoading(true)
 
     try {
-      const response = await fetch(`${API_BASE}/scans`)
+      const response = await apiFetch(`${API_BASE}/scans`)
 
       if (!response.ok) {
         throw new Error('Failed to load scan history')
@@ -93,7 +123,7 @@ function App() {
   }
 
   async function loadScan(scanId) {
-    const response = await fetch(`${API_BASE}/scan/${scanId}`)
+    const response = await apiFetch(`${API_BASE}/scan/${scanId}`)
 
     if (!response.ok) {
       localStorage.removeItem(STORAGE_KEY)
@@ -169,7 +199,7 @@ function App() {
     setSeverity('')
 
     try {
-      const response = await fetch(`${API_BASE}/scan`, {
+      const response = await apiFetch(`${API_BASE}/scan`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

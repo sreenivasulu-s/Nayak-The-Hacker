@@ -20,3 +20,5 @@ frontend/dist/
 # Local runtime database
 scanner.db
 scanner.db
+
+backend/main.py.backup
