@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-const API_BASE = 'http://127.0.0.1:8000'
+const API_BASE = 'http://192.168.16.128:8000'
 const STORAGE_KEY = 'vuln-scanner-scan-id'
 let authHeader = null
 
@@ -151,7 +151,7 @@ const targetConfig = TARGET_CONFIG[targetType]
 
     async function pollScan() {
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${API_BASE}/scan/${savedScanId}`
         )
 
@@ -255,7 +255,7 @@ const targetConfig = TARGET_CONFIG[targetType]
       : `${API_BASE}/scan/${scan.scan_id}/findings`
 
     try {
-      const response = await fetch(endpoint)
+      const response = await apiFetch(endpoint)
 
       if (!response.ok) {
         throw new Error('Failed to fetch findings')
