@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Nayak The Hacker
+Comment=Authorized Security Assessment Scanner
+Exec=/home/kali/Nayak-The-Hacker-REPO/desktop/Nayak-The-Hacker.sh
+Icon=/home/kali/Nayak-The-Hacker-REPO/frontend/public/favicon.svg
+Terminal=false
+Categories=Security;Network;
+StartupNotify=true
