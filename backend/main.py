@@ -1,14 +1,13 @@
+import os
 from uuid import uuid4
-import re
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from backend.scanner.dispatcher import TargetTypeAdapter
 from backend.db import init_db, load_scans, save_scan
-
 
 
 app = FastAPI(
@@ -17,18 +16,24 @@ app = FastAPI(
 )
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://192.168.16.128:5173",
+def _cors_origins() -> list[str]:
+    configured = os.getenv("CORS_ORIGINS", "").strip()
+    if configured:
+        return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+    return [
         "http://localhost:5173",
-        "http://192.168.16.128:5174",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
-        "http://127.0.0.1:5175",
         "http://localhost:5175",
-    ],
+        "http://127.0.0.1:5175",
+    ]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,21 +68,25 @@ class ScanRequest(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def validate_url(cls, value: str) -> str:
+    def normalize_target(cls, value: str) -> str:
         value = value.strip().strip("`").strip()
 
         if "](" in value and value.endswith(")"):
             value = value.split("](", 1)[1][:-1].strip()
 
-        if not (
-            value.startswith("http://")
-            or value.startswith("https://")
-        ):
-            raise ValueError(
-                "URL must start with http:// or https://"
-            )
+        if not value:
+            raise ValueError("Target must not be empty")
 
         return value
+
+    @model_validator(mode="after")
+    def validate_target_for_type(self):
+        if self.target_type in {"web", "api"} and not (
+            self.url.startswith("http://") or self.url.startswith("https://")
+        ):
+            raise ValueError("Web and API targets must start with http:// or https://")
+
+        return self
 
 
 class Finding(BaseModel):
