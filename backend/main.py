@@ -1,36 +1,14 @@
 from uuid import uuid4
 import re
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Depends
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
 from backend.scanner.dispatcher import TargetTypeAdapter
 from backend.db import init_db, load_scans, save_scan
 
-
-security = HTTPBasic()
-
-
-def require_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    import os
-    import secrets
-
-    expected_user = os.environ.get("APP_USERNAME", "")
-    expected_password = os.environ.get("APP_PASSWORD", "")
-
-    if not expected_user or not expected_password:
-        raise HTTPException(status_code=503, detail="Authentication is not configured")
-
-    valid_user = secrets.compare_digest(credentials.username, expected_user)
-    valid_password = secrets.compare_digest(credentials.password, expected_password)
-
-    if not (valid_user and valid_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    return credentials
 
 
 app = FastAPI(
@@ -157,7 +135,6 @@ def home(_credentials: HTTPBasicCredentials = Depends(require_auth)):
 def start_scan(
     request: ScanRequest,
     background_tasks: BackgroundTasks,
-    _credentials: HTTPBasicCredentials = Depends(require_auth),
 ):
     scan_id = str(uuid4())
 
@@ -258,7 +235,6 @@ def get_scan_report(scan_id: str, _credentials: HTTPBasicCredentials = Depends(r
 def get_findings(
     scan_id: str,
     severity: str | None = Query(default=None),
-    _credentials: HTTPBasicCredentials = Depends(require_auth),
 ):
     scan = scans.get(scan_id)
 

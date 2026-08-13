@@ -2,34 +2,8 @@ import { useEffect, useState } from 'react'
 import './App.css'
 const API_BASE = 'http://192.168.16.128:8000'
 const STORAGE_KEY = 'vuln-scanner-scan-id'
-let authHeader = null
-
 async function apiFetch(url, options = {}) {
-  if (!authHeader) {
-    const username = window.prompt('Nayak The Hacker username:')
-    const password = window.prompt('Nayak The Hacker password:')
-
-    if (!username || password === null) {
-      throw new Error('Authentication required')
-    }
-
-    authHeader = `Basic ${btoa(`${username}:${password}`)}`
-  }
-
-  const headers = new Headers(options.headers || {})
-  headers.set('Authorization', authHeader)
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  })
-
-  if (response.status === 401) {
-    authHeader = null
-    throw new Error('Invalid username or password')
-  }
-
-  return response
+  return fetch(url, options)
 }
 
 const TARGET_CONFIG = {
