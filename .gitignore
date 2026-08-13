@@ -1,0 +1,22 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Local runtime database
+scanner.db
+scanner.db
