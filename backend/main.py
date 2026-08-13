@@ -124,7 +124,7 @@ async def run_scan(scan_id: str):
 
 
 @app.get("/")
-def home(_credentials: HTTPBasicCredentials = Depends(require_auth)):
+def home():
     return {
         "status": "ok",
         "message": "Nayak The Hacker Security Scanner API is running",
@@ -153,7 +153,7 @@ def start_scan(
 
 
 @app.get("/scans")
-def get_scans(_credentials: HTTPBasicCredentials = Depends(require_auth)):
+def get_scans():
     return [
         {
             "scan_id": scan["scan_id"],
@@ -167,7 +167,7 @@ def get_scans(_credentials: HTTPBasicCredentials = Depends(require_auth)):
 
 
 @app.get("/scan/{scan_id}")
-def get_scan(scan_id: str, _credentials: HTTPBasicCredentials = Depends(require_auth)):
+def get_scan(scan_id: str):
     scan = scans.get(scan_id)
 
     if scan is None:
@@ -180,7 +180,7 @@ def get_scan(scan_id: str, _credentials: HTTPBasicCredentials = Depends(require_
 
 
 @app.get("/scan/{scan_id}/report")
-def get_scan_report(scan_id: str, _credentials: HTTPBasicCredentials = Depends(require_auth)):
+def get_scan_report(scan_id: str):
     scan = scans.get(scan_id)
 
     if scan is None:
