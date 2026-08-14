@@ -6,28 +6,23 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator, model_validator
 
+from backend.ai_analysis import analyze_findings
 from backend.scanner.dispatcher import TargetTypeAdapter
+from backend.scanner.vapt_orchestrator import ScopeError, run_vapt
 from backend.db import init_db, load_scans, save_scan
 
 
-app = FastAPI(
-    title="Nayak The Hacker",
-    version="0.7.0",
-)
+app = FastAPI(title="Nayak The Hacker", version="0.8.0")
 
 
 def _cors_origins() -> list[str]:
     configured = os.getenv("CORS_ORIGINS", "").strip()
     if configured:
         return [origin.strip() for origin in configured.split(",") if origin.strip()]
-
     return [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5175",
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+        "http://localhost:5175", "http://127.0.0.1:5175",
     ]
 
 
@@ -43,40 +38,26 @@ app.add_middleware(
 class ScanRequest(BaseModel):
     url: str
     target_type: str = "web"
+    authorized: bool = False
+    active_approved: bool = False
 
     @field_validator("target_type")
     @classmethod
     def validate_target_type(cls, value: str) -> str:
         value = value.strip().lower()
-
-        allowed = {
-            "web",
-            "api",
-            "network",
-            "mobile",
-            "cloud",
-            "wireless",
-        }
-
+        allowed = {"web", "api", "network", "mobile", "cloud", "wireless"}
         if value not in allowed:
-            raise ValueError(
-                "target_type must be one of: "
-                "web, api, network, mobile, cloud, wireless"
-            )
-
+            raise ValueError("target_type must be one of: web, api, network, mobile, cloud, wireless")
         return value
 
     @field_validator("url")
     @classmethod
     def normalize_target(cls, value: str) -> str:
         value = value.strip().strip("`").strip()
-
         if "](" in value and value.endswith(")"):
             value = value.split("](", 1)[1][:-1].strip()
-
         if not value:
             raise ValueError("Target must not be empty")
-
         return value
 
     @model_validator(mode="after")
@@ -85,7 +66,8 @@ class ScanRequest(BaseModel):
             self.url.startswith("http://") or self.url.startswith("https://")
         ):
             raise ValueError("Web and API targets must start with http:// or https://")
-
+        if self.active_approved and not self.authorized:
+            raise ValueError("active_approved requires authorized=true")
         return self
 
 
@@ -101,31 +83,33 @@ init_db()
 scans: dict[str, dict] = load_scans()
 
 
-def add_finding(
-    scan_id: str,
-    finding: dict,
-) -> None:
-    scans[scan_id]["findings"].append(
-        Finding(**finding).model_dump()
-    )
+def add_finding(scan_id: str, finding: dict) -> None:
+    scans[scan_id]["findings"].append(Finding(**finding).model_dump())
     save_scan(scans[scan_id])
 
 
 async def run_scan(scan_id: str):
     scan = scans[scan_id]
-
     try:
-        scanner = TargetTypeAdapter()
-        findings = await scanner.scan(
-            scan["target"],
-            scan.get("target_type", "web"),
-        )
+        if scan["target_type"] in {"web", "api"}:
+            findings, raw_tools = await run_vapt(
+                scan["target"],
+                authorized=scan["authorized"],
+                active_approved=scan["active_approved"],
+            )
+            scan["tool_runs"] = raw_tools
+        else:
+            scanner = TargetTypeAdapter()
+            findings = await scanner.scan(scan["target"], scan["target_type"])
 
         for finding in findings:
             add_finding(scan_id, finding)
 
+        scan["ai_analysis"] = analyze_findings(scan["target"], scan["findings"])
         scan["status"] = "completed"
-
+    except ScopeError as exc:
+        scan["status"] = "blocked"
+        scan["error"] = str(exc)
     except Exception as exc:
         scan["status"] = "failed"
         scan["error"] = str(exc)
@@ -134,30 +118,36 @@ async def run_scan(scan_id: str):
 
 @app.get("/")
 def home():
+    return {"status": "ok", "message": "Nayak The Hacker Security Scanner API is running"}
+
+
+@app.get("/capabilities")
+def capabilities():
     return {
-        "status": "ok",
-        "message": "Nayak The Hacker Security Scanner API is running",
+        "url_first_pipeline": ["httpx", "WhatWeb", "Nmap", "Subfinder", "Amass", "ffuf", "Gobuster", "Nuclei", "Nikto"],
+        "active_checks": "disabled by default; requires explicit authorization and active_approved=true",
+        "analysis": "OpenAI Responses API when OPENAI_API_KEY is configured, otherwise local prioritization",
+        "mcp": "mcp/kali_vapt_server.py",
+        "non_url_inputs": "mobile/cloud/social-engineering require separate evidence/workflows and are not inferred from a URL",
     }
 
 
 @app.post("/scan")
-def start_scan(
-    request: ScanRequest,
-    background_tasks: BackgroundTasks,
-):
+def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     scan_id = str(uuid4())
-
     scans[scan_id] = {
         "scan_id": scan_id,
         "target": request.url,
         "target_type": request.target_type,
+        "authorized": request.authorized,
+        "active_approved": request.active_approved,
         "status": "queued",
         "findings": [],
+        "tool_runs": [],
+        "ai_analysis": None,
     }
-
     save_scan(scans[scan_id])
     background_tasks.add_task(run_scan, scan_id)
-
     return scans[scan_id]
 
 
@@ -178,37 +168,19 @@ def get_scans():
 @app.get("/scan/{scan_id}")
 def get_scan(scan_id: str):
     scan = scans.get(scan_id)
-
     if scan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Scan not found",
-        )
-
+        raise HTTPException(status_code=404, detail="Scan not found")
     return scan
 
 
 @app.get("/scan/{scan_id}/report")
 def get_scan_report(scan_id: str):
     scan = scans.get(scan_id)
-
     if scan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Scan not found",
-        )
+        raise HTTPException(status_code=404, detail="Scan not found")
 
-    findings = scan["findings"]
-
-    severity_counts = {
-        "critical": 0,
-        "high": 0,
-        "medium": 0,
-        "low": 0,
-        "info": 0,
-    }
-
-    for finding in findings:
+    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for finding in scan["findings"]:
         severity = finding.get("severity", "info")
         if severity in severity_counts:
             severity_counts[severity] += 1
@@ -219,51 +191,24 @@ def get_scan_report(scan_id: str):
         "target": scan["target"],
         "target_type": scan.get("target_type", "web"),
         "status": scan["status"],
-        "summary": {
-            "total_findings": len(findings),
-            "critical": severity_counts["critical"],
-            "high": severity_counts["high"],
-            "medium": severity_counts["medium"],
-            "low": severity_counts["low"],
-            "info": severity_counts["info"],
-        },
-        "findings": findings,
+        "authorized": scan.get("authorized", False),
+        "active_approved": scan.get("active_approved", False),
+        "summary": {"total_findings": len(scan["findings"]), **severity_counts},
+        "findings": scan["findings"],
+        "ai_analysis": scan.get("ai_analysis"),
     }
-
     return JSONResponse(
         content=report,
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="scan-{scan_id}.json"'
-            )
-        },
+        headers={"Content-Disposition": f'attachment; filename="scan-{scan_id}.json"'},
     )
 
 
 @app.get("/scan/{scan_id}/findings")
-def get_findings(
-    scan_id: str,
-    severity: str | None = Query(default=None),
-):
+def get_findings(scan_id: str, severity: str | None = Query(default=None)):
     scan = scans.get(scan_id)
-
     if scan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Scan not found",
-        )
-
+        raise HTTPException(status_code=404, detail="Scan not found")
     findings = scan["findings"]
-
     if severity:
-        findings = [
-            finding
-            for finding in findings
-            if finding["severity"] == severity
-        ]
-
-    return {
-        "scan_id": scan_id,
-        "count": len(findings),
-        "findings": findings,
-    }
+        findings = [finding for finding in findings if finding["severity"] == severity]
+    return {"scan_id": scan_id, "count": len(findings), "findings": findings}
