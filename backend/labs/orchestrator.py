@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from time import time
 from uuid import uuid4
 
@@ -67,7 +68,11 @@ class LabOrchestrator:
                         timeout=min(60.0, max(5.0, deadline_at - time())),
                     )
                     job.last_event = decision.summary
-                    await self._emit({"type": "agent.decision", "job": job.to_dict(), "decision": decision.__dict__})
+                    await self._emit({
+                        "type": "agent.decision",
+                        "job": job.to_dict(),
+                        "decision": asdict(decision),
+                    })
 
                     if decision.action.lower() in {"stop", "blocked"}:
                         job.status = LabStatus.BLOCKED
