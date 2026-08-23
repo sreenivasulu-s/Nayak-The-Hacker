@@ -22,10 +22,24 @@ def init_db() -> None:
                 target_type TEXT NOT NULL,
                 status TEXT NOT NULL,
                 findings TEXT NOT NULL,
-                error TEXT
+                error TEXT,
+                authorized INTEGER NOT NULL DEFAULT 0,
+                scope TEXT,
+                tools TEXT NOT NULL DEFAULT '[]',
+                evidence TEXT NOT NULL DEFAULT '{}'
             )
             """
         )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(scans)").fetchall()}
+        migrations = {
+            "authorized": "ALTER TABLE scans ADD COLUMN authorized INTEGER NOT NULL DEFAULT 0",
+            "scope": "ALTER TABLE scans ADD COLUMN scope TEXT",
+            "tools": "ALTER TABLE scans ADD COLUMN tools TEXT NOT NULL DEFAULT '[]'",
+            "evidence": "ALTER TABLE scans ADD COLUMN evidence TEXT NOT NULL DEFAULT '{}'",
+        }
+        for name, statement in migrations.items():
+            if name not in columns:
+                connection.execute(statement)
         connection.commit()
 
 
@@ -34,14 +48,10 @@ def save_scan(scan: dict[str, Any]) -> None:
         connection.execute(
             """
             INSERT OR REPLACE INTO scans (
-                scan_id,
-                target,
-                target_type,
-                status,
-                findings,
-                error
+                scan_id, target, target_type, status, findings, error,
+                authorized, scope, tools, evidence
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scan["scan_id"],
@@ -50,6 +60,10 @@ def save_scan(scan: dict[str, Any]) -> None:
                 scan["status"],
                 json.dumps(scan.get("findings", [])),
                 scan.get("error"),
+                1 if scan.get("authorized") else 0,
+                scan.get("scope"),
+                json.dumps(scan.get("tools", [])),
+                json.dumps(scan.get("evidence", {})),
             ),
         )
         connection.commit()
@@ -59,20 +73,13 @@ def load_scans() -> dict[str, dict[str, Any]]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT
-                scan_id,
-                target,
-                target_type,
-                status,
-                findings,
-                error
-            FROM scans
-            ORDER BY rowid ASC
+            SELECT scan_id, target, target_type, status, findings, error,
+                   authorized, scope, tools, evidence
+            FROM scans ORDER BY rowid ASC
             """
         ).fetchall()
 
     scans: dict[str, dict[str, Any]] = {}
-
     for row in rows:
         scans[row["scan_id"]] = {
             "scan_id": row["scan_id"],
@@ -80,11 +87,13 @@ def load_scans() -> dict[str, dict[str, Any]]:
             "target_type": row["target_type"],
             "status": row["status"],
             "findings": json.loads(row["findings"] or "[]"),
+            "authorized": bool(row["authorized"]),
+            "scope": row["scope"],
+            "tools": json.loads(row["tools"] or "[]"),
+            "evidence": json.loads(row["evidence"] or "{}"),
         }
-
         if row["error"]:
             scans[row["scan_id"]]["error"] = row["error"]
-
     return scans
 
 
