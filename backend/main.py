@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from backend.db import init_db, load_scans, save_scan
 from backend.npt_v7.catalog import TOOLS, assessment_catalog
 from backend.npt_v7.control_plane import Authorization, PolicyProfile, authorize
+from backend.npt_v7.correlation import correlate_findings
 from backend.npt_v7.evidence import make_evidence
 from backend.npt_v7.state_machine import State, transition
 from backend.npt_v7.verification import verify_candidate
@@ -138,6 +139,7 @@ async def run_scan(scan_id: str):
         save_scan(scan)
 
         _set_state(scan, State.VERIFICATION)
+        verified_candidates = []
         for candidate in findings:
             tool = candidate.get("tool", "unknown")
             evidence = [scan["evidence"][tool]] if tool in scan["evidence"] else []
@@ -145,8 +147,9 @@ async def run_scan(scan_id: str):
             candidate["verification_status"] = result["status"]
             candidate["confidence"] = result["confidence"]
             if result["status"] != "REJECTED":
-                scan["findings"].append(Finding(**candidate).model_dump())
+                verified_candidates.append(Finding(**candidate).model_dump())
 
+        scan["findings"] = correlate_findings(verified_candidates)
         if any(item.get("verification_status") == "VERIFIED" for item in scan["findings"]):
             _set_state(scan, State.VERIFIED)
             _set_state(scan, State.FALSE_POSITIVE_GATE)
