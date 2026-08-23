@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-npt}
+      POSTGRES_USER: ${POSTGRES_USER:-npt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - npt-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [npt]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - npt-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [npt]
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    environment:
+      NPT_DATABASE_URL: postgresql+psycopg://npt:${POSTGRES_PASSWORD}@postgres:5432/npt
+      NPT_REDIS_URL: redis://redis:6379/0
+      NPT_ENV: production
+      NPT_SECRET_KEY: ${NPT_SECRET_KEY:?set NPT_SECRET_KEY}
+      NPT_AUTH_MODE: ${NPT_AUTH_MODE:-local}
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [npt]
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      NPT_DATABASE_URL: postgresql+psycopg://npt:${POSTGRES_PASSWORD}@postgres:5432/npt
+      NPT_REDIS_URL: redis://redis:6379/0
+      NPT_ENV: production
+      NPT_SECRET_KEY: ${NPT_SECRET_KEY:?set NPT_SECRET_KEY}
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    networks: [npt]
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - npt-ollama:/root/.ollama
+    networks: [npt]
+
+volumes:
+  npt-postgres:
+  npt-redis:
+  npt-ollama:
+
+networks:
+  npt:
+    driver: bridge
