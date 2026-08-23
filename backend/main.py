@@ -6,86 +6,54 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator, model_validator
 
-from backend.scanner.dispatcher import TargetTypeAdapter
 from backend.db import init_db, load_scans, save_scan
+from backend.scanner.tool_runner import execute_tools
 
-
-app = FastAPI(
-    title="Nayak The Hacker",
-    version="0.7.0",
-)
+app = FastAPI(title="Nayak Enterprise Penetration Testing Platform", version="7.0.0")
 
 
 def _cors_origins() -> list[str]:
     configured = os.getenv("CORS_ORIGINS", "").strip()
     if configured:
         return [origin.strip() for origin in configured.split(",") if origin.strip()]
-
-    return [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5175",
-    ]
+    return ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins(), allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+TOOLS = {"nmap", "gobuster", "nikto", "nuclei"}
 
 
 class ScanRequest(BaseModel):
-    url: str
-    target_type: str = "web"
+    target: str
+    scope: str
+    tools: list[str]
+    authorized: bool = False
 
-    @field_validator("target_type")
+    @field_validator("target", "scope")
     @classmethod
-    def validate_target_type(cls, value: str) -> str:
-        value = value.strip().lower()
-
-        allowed = {
-            "web",
-            "api",
-            "network",
-            "mobile",
-            "cloud",
-            "wireless",
-        }
-
-        if value not in allowed:
-            raise ValueError(
-                "target_type must be one of: "
-                "web, api, network, mobile, cloud, wireless"
-            )
-
-        return value
-
-    @field_validator("url")
-    @classmethod
-    def normalize_target(cls, value: str) -> str:
+    def clean_text(cls, value: str) -> str:
         value = value.strip().strip("`").strip()
-
-        if "](" in value and value.endswith(")"):
-            value = value.split("](", 1)[1][:-1].strip()
-
         if not value:
-            raise ValueError("Target must not be empty")
-
+            raise ValueError("Target and scope are required")
         return value
+
+    @field_validator("tools")
+    @classmethod
+    def validate_tools(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(tool.strip().lower() for tool in value if tool.strip()))
+        if not normalized:
+            raise ValueError("Select at least one scanner tool")
+        unknown = [tool for tool in normalized if tool not in TOOLS]
+        if unknown:
+            raise ValueError(f"Unsupported tools: {', '.join(unknown)}")
+        return normalized
 
     @model_validator(mode="after")
-    def validate_target_for_type(self):
-        if self.target_type in {"web", "api"} and not (
-            self.url.startswith("http://") or self.url.startswith("https://")
-        ):
-            raise ValueError("Web and API targets must start with http:// or https://")
-
+    def validate_authorization(self):
+        if not self.authorized:
+            raise ValueError("Explicit authorization is required before a scan can start")
         return self
 
 
@@ -101,31 +69,15 @@ init_db()
 scans: dict[str, dict] = load_scans()
 
 
-def add_finding(
-    scan_id: str,
-    finding: dict,
-) -> None:
-    scans[scan_id]["findings"].append(
-        Finding(**finding).model_dump()
-    )
-    save_scan(scans[scan_id])
-
-
 async def run_scan(scan_id: str):
     scan = scans[scan_id]
-
+    scan["status"] = "running"
+    save_scan(scan)
     try:
-        scanner = TargetTypeAdapter()
-        findings = await scanner.scan(
-            scan["target"],
-            scan.get("target_type", "web"),
-        )
-
-        for finding in findings:
-            add_finding(scan_id, finding)
-
+        findings, evidence = await execute_tools(scan["target"], scan["scope"], scan["tools"])
+        scan["findings"] = [Finding(**finding).model_dump() for finding in findings]
+        scan["evidence"] = evidence
         scan["status"] = "completed"
-
     except Exception as exc:
         scan["status"] = "failed"
         scan["error"] = str(exc)
@@ -134,136 +86,77 @@ async def run_scan(scan_id: str):
 
 @app.get("/")
 def home():
-    return {
-        "status": "ok",
-        "message": "Nayak The Hacker Security Scanner API is running",
-    }
+    return {"status": "ok", "message": "Nayak Enterprise Penetration Testing Platform API is running", "version": "7.0.0", "execution_mode": "real", "tools": sorted(TOOLS)}
+
+
+@app.get("/tools")
+def get_tools():
+    return {"tools": sorted(TOOLS)}
 
 
 @app.post("/scan")
-def start_scan(
-    request: ScanRequest,
-    background_tasks: BackgroundTasks,
-):
+def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     scan_id = str(uuid4())
-
     scans[scan_id] = {
         "scan_id": scan_id,
-        "target": request.url,
-        "target_type": request.target_type,
+        "target": request.target,
+        "scope": request.scope,
+        "authorized": request.authorized,
+        "tools": request.tools,
+        "target_type": "web" if request.target.startswith(("http://", "https://")) else "network",
         "status": "queued",
         "findings": [],
+        "evidence": {},
     }
-
     save_scan(scans[scan_id])
     background_tasks.add_task(run_scan, scan_id)
-
     return scans[scan_id]
 
 
 @app.get("/scans")
 def get_scans():
-    return [
-        {
-            "scan_id": scan["scan_id"],
-            "target": scan["target"],
-            "target_type": scan.get("target_type", "web"),
-            "status": scan["status"],
-            "findings_count": len(scan["findings"]),
-        }
-        for scan in reversed(list(scans.values()))
-    ]
+    return [{"scan_id": s["scan_id"], "target": s["target"], "scope": s.get("scope"), "tools": s.get("tools", []), "status": s["status"], "findings_count": len(s["findings"])} for s in reversed(list(scans.values()))]
 
 
 @app.get("/scan/{scan_id}")
 def get_scan(scan_id: str):
     scan = scans.get(scan_id)
-
     if scan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Scan not found",
-        )
-
+        raise HTTPException(status_code=404, detail="Scan not found")
     return scan
+
+
+@app.get("/scan/{scan_id}/findings")
+def get_findings(scan_id: str, severity: str | None = Query(default=None)):
+    scan = scans.get(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    findings = scan["findings"]
+    if severity:
+        findings = [finding for finding in findings if finding["severity"] == severity]
+    return {"scan_id": scan_id, "count": len(findings), "findings": findings}
 
 
 @app.get("/scan/{scan_id}/report")
 def get_scan_report(scan_id: str):
     scan = scans.get(scan_id)
-
     if scan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Scan not found",
-        )
-
-    findings = scan["findings"]
-
-    severity_counts = {
-        "critical": 0,
-        "high": 0,
-        "medium": 0,
-        "low": 0,
-        "info": 0,
-    }
-
-    for finding in findings:
-        severity = finding.get("severity", "info")
-        if severity in severity_counts:
-            severity_counts[severity] += 1
-
+        raise HTTPException(status_code=404, detail="Scan not found")
+    counts = {level: 0 for level in ("critical", "high", "medium", "low", "info")}
+    for finding in scan["findings"]:
+        level = finding.get("severity", "info")
+        if level in counts:
+            counts[level] += 1
     report = {
-        "report": "Nayak The Hacker Security Assessment Report",
+        "report": "Nayak Enterprise Penetration Testing Platform Assessment Report",
         "scan_id": scan["scan_id"],
         "target": scan["target"],
-        "target_type": scan.get("target_type", "web"),
+        "scope": scan["scope"],
+        "authorized": scan["authorized"],
+        "tools": scan["tools"],
         "status": scan["status"],
-        "summary": {
-            "total_findings": len(findings),
-            "critical": severity_counts["critical"],
-            "high": severity_counts["high"],
-            "medium": severity_counts["medium"],
-            "low": severity_counts["low"],
-            "info": severity_counts["info"],
-        },
-        "findings": findings,
+        "summary": {"total_findings": len(scan["findings"]), **counts},
+        "findings": scan["findings"],
+        "evidence": scan.get("evidence", {}),
     }
-
-    return JSONResponse(
-        content=report,
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="scan-{scan_id}.json"'
-            )
-        },
-    )
-
-
-@app.get("/scan/{scan_id}/findings")
-def get_findings(
-    scan_id: str,
-    severity: str | None = Query(default=None),
-):
-    scan = scans.get(scan_id)
-
-    if scan is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Scan not found",
-        )
-
-    findings = scan["findings"]
-
-    if severity:
-        findings = [
-            finding
-            for finding in findings
-            if finding["severity"] == severity
-        ]
-
-    return {
-        "scan_id": scan_id,
-        "count": len(findings),
-        "findings": findings,
-    }
+    return JSONResponse(content=report, headers={"Content-Disposition": f'attachment; filename="scan-{scan_id}.json"'})
