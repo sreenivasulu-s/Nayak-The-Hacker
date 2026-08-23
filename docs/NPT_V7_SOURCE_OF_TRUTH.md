@@ -48,8 +48,8 @@ Execution errors enter `ERROR`; retry/circuit-breaker behavior remains a separat
 
 ## Current implementation boundary
 
-The repository contains the v7 frontend workflow, FastAPI control path, SQLite persistence, real bounded subprocess execution for the four enabled scanners, evidence hashing, verification, category routing, capability registry and CI tests.
+The repository contains the v7 frontend workflow, FastAPI control path, SQLite persistence, real bounded subprocess execution for the four enabled scanners, evidence hashing, verification, deterministic correlation, category routing, capability registry, JSON/HTML reports and regression tests.
 
-Production components that require separate infrastructure before claiming enterprise completeness include durable job queues, isolated container/VM workers, external identity/RBAC, PostgreSQL migrations, secrets management, dedicated MCP/LLM gateway, human-review persistence, PDF/HTML reporting, distributed observability and production retry/DLQ orchestration.
+Production components that still require dedicated infrastructure before claiming enterprise completeness include durable job queues, isolated container/VM workers, external identity/RBAC, PostgreSQL migrations, secrets management, dedicated MCP/LLM gateway, human-review persistence, PDF reporting, distributed observability and production retry/DLQ orchestration.
 
 These components must preserve the same gates and must never bypass the control plane.
