@@ -1,9 +1,10 @@
+import html
 import os
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, field_validator, model_validator
 
 from backend.db import init_db, load_scans, save_scan
@@ -287,16 +288,12 @@ def get_findings(scan_id: str, severity: str | None = Query(default=None)):
     return {"scan_id": scan_id, "count": len(findings), "findings": findings}
 
 
-@app.get("/scan/{scan_id}/report")
-def get_scan_report(scan_id: str):
-    scan = scans.get(scan_id)
-    if scan is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def _report_payload(scan: dict) -> dict:
     counts = {
         level: sum(1 for f in scan["findings"] if f.get("severity") == level)
         for level in ("critical", "high", "medium", "low", "info")
     }
-    report = {
+    return {
         "report": "Nayak Pen Testing Tool Assessment Report",
         "architecture": "NPT v7.0",
         "scan_id": scan["scan_id"],
@@ -313,7 +310,45 @@ def get_scan_report(scan_id: str):
         "findings": scan["findings"],
         "evidence": scan.get("evidence", {}),
     }
+
+
+@app.get("/scan/{scan_id}/report")
+def get_scan_report(scan_id: str):
+    scan = scans.get(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
     return JSONResponse(
-        content=report,
+        content=_report_payload(scan),
         headers={"Content-Disposition": f'attachment; filename="scan-{scan_id}.json"'},
     )
+
+
+@app.get("/scan/{scan_id}/report.html", response_class=HTMLResponse)
+def get_scan_html_report(scan_id: str):
+    scan = scans.get(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    payload = _report_payload(scan)
+    rows = "".join(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+            html.escape(str(item.get("severity", "info"))),
+            html.escape(str(item.get("title", ""))),
+            html.escape(str(item.get("tool", ""))),
+            html.escape(str(item.get("verification_status", "UNCERTAIN"))),
+            html.escape(str(item.get("evidence", ""))),
+        )
+        for item in payload["findings"]
+    )
+    document = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>NPT v7.0 Report {html.escape(scan_id)}</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:1200px;margin:40px auto;padding:0 20px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}}th{{background:#f5f5f5}}code{{word-break:break-all}}</style></head>
+<body><h1>Nayak Pen Testing Tool — NPT v7.0</h1>
+<p><strong>Assessment:</strong> {html.escape(str(payload['category']))}</p>
+<p><strong>Target:</strong> <code>{html.escape(str(payload['target']))}</code></p>
+<p><strong>Authorized scope:</strong> <code>{html.escape(str(payload['scope']))}</code></p>
+<p><strong>State:</strong> {html.escape(str(payload['state']))} · <strong>Status:</strong> {html.escape(str(payload['status']))}</p>
+<p><strong>Tools:</strong> {html.escape(', '.join(payload['tools']))}</p>
+<h2>Findings ({payload['summary']['total_findings']})</h2>
+<table><thead><tr><th>Severity</th><th>Title</th><th>Tool</th><th>Verification</th><th>Evidence</th></tr></thead><tbody>{rows or '<tr><td colspan="5">No findings</td></tr>'}</tbody></table>
+</body></html>"""
+    return HTMLResponse(content=document, headers={"Content-Disposition": f'inline; filename="scan-{scan_id}.html"'})
