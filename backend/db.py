@@ -46,7 +46,17 @@ def init_db() -> None:
 
 
 def _metadata(scan: dict[str, Any]) -> dict[str, Any]:
-    keys = ("category", "state", "user_confirmation", "project_id", "user_id", "policy_profile", "authorization_gate")
+    keys = (
+        "category",
+        "state",
+        "state_history",
+        "scope_version",
+        "user_confirmation",
+        "project_id",
+        "user_id",
+        "policy_profile",
+        "authorization_gate",
+    )
     return {key: scan[key] for key in keys if key in scan}
 
 
@@ -61,10 +71,16 @@ def save_scan(scan: dict[str, Any]) -> None:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                scan["scan_id"], scan["target"], scan.get("target_type", "web"),
-                scan["status"], json.dumps(scan.get("findings", [])), scan.get("error"),
-                1 if scan.get("authorized") else 0, scan.get("scope"),
-                json.dumps(scan.get("tools", [])), json.dumps(scan.get("evidence", {})),
+                scan["scan_id"],
+                scan["target"],
+                scan.get("target_type", "web"),
+                scan["status"],
+                json.dumps(scan.get("findings", [])),
+                scan.get("error"),
+                1 if scan.get("authorized") else 0,
+                scan.get("scope"),
+                json.dumps(scan.get("tools", [])),
+                json.dumps(scan.get("evidence", {})),
                 json.dumps(_metadata(scan)),
             ),
         )
@@ -85,10 +101,15 @@ def load_scans() -> dict[str, dict[str, Any]]:
     for row in rows:
         metadata = json.loads(row["metadata"] or "{}")
         scans[row["scan_id"]] = {
-            "scan_id": row["scan_id"], "target": row["target"], "target_type": row["target_type"],
-            "status": row["status"], "findings": json.loads(row["findings"] or "[]"),
-            "authorized": bool(row["authorized"]), "scope": row["scope"],
-            "tools": json.loads(row["tools"] or "[]"), "evidence": json.loads(row["evidence"] or "{}"),
+            "scan_id": row["scan_id"],
+            "target": row["target"],
+            "target_type": row["target_type"],
+            "status": row["status"],
+            "findings": json.loads(row["findings"] or "[]"),
+            "authorized": bool(row["authorized"]),
+            "scope": row["scope"],
+            "tools": json.loads(row["tools"] or "[]"),
+            "evidence": json.loads(row["evidence"] or "{}"),
             **metadata,
         }
         if row["error"]:
