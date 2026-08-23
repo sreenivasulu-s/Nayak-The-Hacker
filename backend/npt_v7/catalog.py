@@ -27,19 +27,26 @@ CATEGORIES = {
     "internal": {"name": "Internal Pentesting", "tools": ("nmap",)},
 }
 
+# The registry contains the complete v7 core layer. Only the bounded read-only
+# tools are enabled by default. Active-validation and credential tooling remain
+# capability-disabled until a separate policy/worker implementation exists.
 TOOLS = {
     "nmap": ToolSpec("nmap", "network-discovery", "read-only-discovery", True),
-    "gobuster": ToolSpec("gobuster", "web-content-discovery", "read-only-discovery", True),
-    "nikto": ToolSpec("nikto", "web-review", "read-only-review", True),
-    "nuclei": ToolSpec("nuclei", "template-review", "read-only-review", True),
     "wireshark": ToolSpec("wireshark", "packet-analysis", "analysis", False),
     "netcat": ToolSpec("netcat", "network-connectivity", "controlled-network", False),
-    "burp": ToolSpec("burp", "http-analysis", "controlled-web", False),
-    "ffuf": ToolSpec("ffuf", "web-content-discovery", "controlled-web", False),
-    "sqlmap": ToolSpec("sqlmap", "database-validation", "active-validation", False),
     "aircrack": ToolSpec("aircrack", "wireless-analysis", "wireless", False),
+    "burp": ToolSpec("burp", "http-analysis", "controlled-web", False),
+    "gobuster": ToolSpec("gobuster", "web-content-discovery", "read-only-discovery", True),
+    "ffuf": ToolSpec("ffuf", "web-content-discovery", "controlled-web", False),
+    "nikto": ToolSpec("nikto", "web-review", "read-only-review", True),
+    "sqlmap": ToolSpec("sqlmap", "database-validation", "active-validation", False),
+    "hydra": ToolSpec("hydra", "credential-validation", "credential-validation", False),
+    "hashcat": ToolSpec("hashcat", "credential-analysis", "credential-analysis", False),
+    "john": ToolSpec("john", "credential-analysis", "credential-analysis", False),
+    "metasploit": ToolSpec("metasploit", "controlled-validation", "active-validation", False),
     "ghidra": ToolSpec("ghidra", "binary-analysis", "analysis", False),
     "yara": ToolSpec("yara", "artifact-analysis", "analysis", False),
+    "nuclei": ToolSpec("nuclei", "template-review", "read-only-review", True),
 }
 
 
