@@ -13,8 +13,10 @@ from backend.npt_v7.evidence import make_evidence
 from backend.npt_v7.state_machine import State
 from backend.npt_v7.verification import verify_candidate
 from backend.scanner.tool_runner import execute_tools
+from backend.npt_v7.lab_solver.models import LabJob, LabState
+from backend.npt_v7.lab_solver.orchestrator import build_lab_plan, validate_lab_url
 
-app = FastAPI(title="Nayak Pen Testing Tool", version="7.0.0")
+app = FastAPI(title="Nayak Pen Testing Tool", version="7.1.0")
 
 
 def _cors_origins() -> list[str]:
@@ -66,8 +68,28 @@ class Finding(BaseModel):
     confidence: float = 0.0
 
 
+class LabRequest(BaseModel):
+    url: str
+    authorized: bool = True
+    user_confirmation: bool = True
+
+    @field_validator("url")
+    @classmethod
+    def clean_url(cls, value: str) -> str:
+        value = value.strip().strip("`").strip()
+        validate_lab_url(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_confirmation(self):
+        if not self.authorized or not self.user_confirmation:
+            raise ValueError("PortSwigger lab authorization and confirmation are required")
+        return self
+
+
 init_db()
 scans: dict[str, dict] = load_scans()
+lab_jobs: dict[str, LabJob] = {}
 
 
 async def run_scan(scan_id: str):
@@ -95,11 +117,27 @@ async def run_scan(scan_id: str):
     save_scan(scan)
 
 
+def lab_report(job: LabJob) -> dict:
+    return {
+        "report": "Nayak Pen Testing Tool — PortSwigger Lab Report",
+        "job_id": job.job_id,
+        "lab_url": job.lab_url,
+        "lab_host": job.lab_host,
+        "lab_name": job.lab_name,
+        "status": job.result,
+        "state": job.state,
+        "hypothesis": job.hypothesis,
+        "events": job.events,
+        "evidence": job.evidence,
+        "error": job.error,
+    }
+
+
 @app.get("/")
-def home(): return {"status": "ok", "message": "Nayak Pen Testing Tool API is running", "version": "7.0.0", "execution_mode": "real", "architecture": "NPT v7.0", "assessment_categories": 13}
+def home(): return {"status": "ok", "message": "Nayak Pen Testing Tool API is running", "version": "7.1.0", "execution_mode": "real", "architecture": "NPT v7.1", "assessment_categories": 13, "portswigger_lab_solver": True}
 
 @app.get("/assessment-categories")
-def get_assessment_categories(): return {"version": "7.0.0", "categories": assessment_catalog()}
+def get_assessment_categories(): return {"version": "7.1.0", "categories": assessment_catalog()}
 
 @app.get("/tools")
 def get_tools(): return {"tools": ["nmap", "gobuster", "nikto", "nuclei"], "note": "Only tools enabled by category and policy can execute"}
@@ -112,6 +150,38 @@ def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     scan_id = str(uuid4())
     scans[scan_id] = {"scan_id": scan_id, "category": request.category, "target": request.target, "scope": request.scope, "authorized": request.authorized, "user_confirmation": request.user_confirmation, "project_id": request.project_id, "user_id": request.user_id, "policy_profile": request.policy_profile, "tools": gate["plan"]["planned_tools"], "target_type": "web" if request.target.startswith(("http://", "https://")) else "network", "status": "created", "state": State.CREATED, "findings": [], "evidence": {}, "authorization_gate": gate}
     save_scan(scans[scan_id]); background_tasks.add_task(run_scan, scan_id); return scans[scan_id]
+
+@app.post("/lab")
+def start_lab(request: LabRequest):
+    job_id = str(uuid4())
+    job = LabJob(job_id=job_id, lab_url=request.url, state=LabState.VALIDATING)
+    try:
+        plan = build_lab_plan(job)
+        job.state = LabState.DISCOVERING
+        job.event("job_created", job_id=job_id)
+        job.event("plan_created", plan=plan)
+        job.state = LabState.PLANNING
+        lab_jobs[job_id] = job
+        return lab_report(job)
+    except (ValueError, PermissionError) as exc:
+        job.state = LabState.FAILED; job.result = "rejected"; job.error = str(exc); lab_jobs[job_id] = job
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+@app.get("/labs")
+def get_labs():
+    return [lab_report(job) for job in reversed(list(lab_jobs.values()))]
+
+@app.get("/lab/{job_id}")
+def get_lab(job_id: str):
+    job = lab_jobs.get(job_id)
+    if job is None: raise HTTPException(status_code=404, detail="Lab job not found")
+    return lab_report(job)
+
+@app.get("/lab/{job_id}/report")
+def get_lab_report(job_id: str):
+    job = lab_jobs.get(job_id)
+    if job is None: raise HTTPException(status_code=404, detail="Lab job not found")
+    return JSONResponse(content=lab_report(job), headers={"Content-Disposition": f'attachment; filename="lab-{job_id}.json"'})
 
 @app.get("/scans")
 def get_scans(): return [{"scan_id": s["scan_id"], "category": s.get("category"), "target": s["target"], "scope": s.get("scope"), "tools": s.get("tools", []), "status": s["status"], "state": s.get("state"), "findings_count": len(s["findings"])} for s in reversed(list(scans.values()))]
