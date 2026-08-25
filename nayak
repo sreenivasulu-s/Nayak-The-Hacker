@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""One-command PortSwigger Academy lab runner.
+
+Usage:
+  ./nayak lab 'https://<lab>.web-security-academy.net'
+
+The runner is intentionally restricted to PortSwigger Academy training hosts.
+Actual request execution is delegated to the configured Burp MCP gateway.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+
+from backend.labs.orchestrator import LabOrchestrator
+from backend.labs.target import normalize_lab_target
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="nayak")
+    sub = parser.add_subparsers(dest="command", required=True)
+    lab = sub.add_parser("lab", help="solve one authorized PortSwigger Academy lab")
+    lab.add_argument("url", help="PortSwigger lab URL")
+    lab.add_argument("--deadline", type=int, default=3600)
+    lab.add_argument("--attempts", type=int, default=12)
+    lab.add_argument("--workers", type=int, default=1)
+    return parser
+
+
+async def run_lab(args: argparse.Namespace) -> int:
+    target = normalize_lab_target(args.url)
+    print(f"[+] Target: {target.url}")
+    print(f"[+] Lab ID: {target.lab_id}")
+    print(f"[+] Category: {target.category}")
+    print("[*] Starting authorized lab orchestrator...")
+    runner = LabOrchestrator(
+        max_workers=args.workers,
+        deadline_seconds=args.deadline,
+        max_attempts=args.attempts,
+    )
+    if not runner.burp.configured:
+        print("[!] BURP_MCP_URL is not configured. Configure the Burp MCP gateway before execution.", file=sys.stderr)
+        return 2
+    result = await runner.run([target.url])
+    job = result.jobs[target.lab_id]
+    print(f"[*] Status: {job.status}")
+    if job.error:
+        print(f"[!] Error: {job.error}", file=sys.stderr)
+    report_path = f"lab-{result.run_id}.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        json.dump(result.summary(), handle, indent=2, default=str)
+    print(f"[+] Report: {report_path}")
+    return 0 if str(job.status).lower().endswith("solved") else 1
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if args.command == "lab":
+        try:
+            return asyncio.run(run_lab(args))
+        except (ValueError, PermissionError) as exc:
+            print(f"[!] {exc}", file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            print("[!] Interrupted", file=sys.stderr)
+            return 130
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
