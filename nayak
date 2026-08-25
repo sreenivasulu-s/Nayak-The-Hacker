@@ -14,8 +14,27 @@ import asyncio
 import json
 import sys
 
+from backend.labs.browser import BrowserGateway
 from backend.labs.orchestrator import LabOrchestrator
+from backend.labs.providers import AgentDecision
 from backend.labs.target import normalize_lab_target
+
+
+
+class BrowserOnlyAgent:
+    """Deterministic agent for browser-only Academy lab inspection."""
+    async def decide(self, *, target, category, evidence):
+        if evidence:
+            return AgentDecision(
+                action="stop",
+                summary="Browser inspection completed; human/LLM analysis can continue from captured evidence.",
+            )
+        return AgentDecision(
+            action="request",
+            summary="Open the authorized Academy lab in the browser",
+            tool="browser_navigate",
+            arguments={},
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     lab.add_argument("--deadline", type=int, default=3600)
     lab.add_argument("--attempts", type=int, default=12)
     lab.add_argument("--workers", type=int, default=1)
+    lab.add_argument("--browser-only", action="store_true", help="use the local Playwright browser gateway without Burp MCP")
     return parser
 
 
@@ -39,8 +59,14 @@ async def run_lab(args: argparse.Namespace) -> int:
         max_workers=args.workers,
         deadline_seconds=args.deadline,
         max_attempts=args.attempts,
+        agent=BrowserOnlyAgent() if args.browser_only else None,
+        browser=BrowserGateway() if args.browser_only else None,
     )
-    if not runner.burp.configured:
+    if args.browser_only:
+        if not runner.browser.configured:
+            print("[!] BROWSER_GATEWAY_URL is not configured.", file=sys.stderr)
+            return 2
+    elif not runner.burp.configured:
         print("[!] BURP_MCP_URL is not configured. Configure the Burp MCP gateway before execution.", file=sys.stderr)
         return 2
     result = await runner.run([target.url])
@@ -49,8 +75,13 @@ async def run_lab(args: argparse.Namespace) -> int:
     if job.error:
         print(f"[!] Error: {job.error}", file=sys.stderr)
     report_path = f"lab-{result.run_id}.json"
+    payload = {
+        "report": "Nayak PortSwigger Lab Assessment",
+        "run": result.summary(),
+        "jobs": [job.to_dict() for job in result.jobs.values()],
+    }
     with open(report_path, "w", encoding="utf-8") as handle:
-        json.dump(result.summary(), handle, indent=2, default=str)
+        json.dump(payload, handle, indent=2, default=str)
     print(f"[+] Report: {report_path}")
     return 0 if str(job.status).lower().endswith("solved") else 1
 

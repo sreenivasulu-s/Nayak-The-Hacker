@@ -7,6 +7,7 @@ from time import time
 from uuid import uuid4
 
 from .models import LabJob, LabRun, LabStatus
+from .browser import BrowserGateway
 from .providers import AgentDecision, BurpMcpGateway, LabAgent, OllamaLabAgent
 from .target import normalize_lab_target
 
@@ -24,6 +25,7 @@ class LabOrchestrator:
         max_attempts: int = 12,
         agent: LabAgent | None = None,
         burp: BurpMcpGateway | None = None,
+        browser: BrowserGateway | None = None,
         event_sink: EventSink | None = None,
     ):
         self.max_workers = max(1, max_workers)
@@ -31,6 +33,7 @@ class LabOrchestrator:
         self.max_attempts = max(1, max_attempts)
         self.agent = agent or OllamaLabAgent()
         self.burp = burp or BurpMcpGateway()
+        self.browser = browser or BrowserGateway()
         self.event_sink = event_sink
 
     async def _emit(self, event: dict) -> None:
@@ -96,7 +99,10 @@ class LabOrchestrator:
                         job.error = f"Tool not allowlisted: {decision.tool}"
                         break
 
-                    result = await self.burp.call(decision.tool, decision.arguments or {})
+                    if decision.tool == "browser_navigate":
+                        result = await self.browser.navigate(job.target)
+                    else:
+                        result = await self.burp.call(decision.tool, decision.arguments or {})
                     job.evidence.append({
                         "attempt": job.attempts,
                         "tool": decision.tool,

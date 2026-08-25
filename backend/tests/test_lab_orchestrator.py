@@ -74,3 +74,48 @@ def test_agent_stop_marks_job_blocked():
         assert run.jobs["a3"].status == LabStatus.BLOCKED
 
     asyncio.run(run_test())
+
+
+def test_orchestrator_browser_navigate_uses_browser_gateway():
+    class BrowserAgent:
+        async def decide(self, *, target, category, evidence):
+            return AgentDecision(
+                action="request",
+                summary="inspect lab in browser",
+                tool="browser_navigate",
+                arguments={},
+            )
+
+    class FakeBrowser:
+        def __init__(self):
+            self.calls = []
+
+        async def navigate(self, target):
+            self.calls.append(target)
+            return {
+                "url": target,
+                "status": 200,
+                "title": "Academy lab",
+                "body_excerpt": "lab page",
+            }
+
+    async def run_test():
+        browser = FakeBrowser()
+        orchestrator = LabOrchestrator(
+            max_workers=1,
+            deadline_seconds=60,
+            max_attempts=1,
+            agent=BrowserAgent(),
+            browser=browser,
+        )
+
+        target = "https://browser-test.web-security-academy.net/"
+        run = await orchestrator.run([target])
+        job = run.jobs["browser-test"]
+
+        assert job.status == LabStatus.FAILED
+        assert browser.calls == [target]
+        assert job.evidence[0]["tool"] == "browser_navigate"
+        assert job.evidence[0]["result"]["status"] == 200
+
+    asyncio.run(run_test())

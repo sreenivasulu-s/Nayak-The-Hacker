@@ -1,12 +1,26 @@
 from fastapi.testclient import TestClient
 
+import httpx
 import os
+
 
 os.environ["APP_USERNAME"] = "sreenivasulu-s"
 os.environ["APP_PASSWORD"] = "test-password-for-pytest"
 
 
 from backend.main import app
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def mock_scanner_http(monkeypatch):
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: _fake_http_client(),
+    )
 
 
 import base64
@@ -19,6 +33,33 @@ client = TestClient(
     app,
     headers={"Authorization": f"Basic {_TEST_AUTH}"},
 )
+
+
+def _fake_http_client():
+    class FakeResponse:
+        status_code = 200
+        headers = {
+            "server": "TestServer/1.0",
+        }
+
+        def __init__(self, url):
+            self.url = url
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            pass
+
+        async def get(self, target):
+            assert target in {
+                "http://127.0.0.1:8000",
+                "http://127.0.0.1:8001",
+            }
+            return FakeResponse(target)
+
+    return FakeClient()
 
 
 def test_health_check():
