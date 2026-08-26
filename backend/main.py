@@ -8,6 +8,8 @@ from pydantic import BaseModel, field_validator, model_validator
 
 from backend.scanner.dispatcher import TargetTypeAdapter
 from backend.db import init_db, load_scans, save_scan
+from backend.labs.orchestrator import LabOrchestrator
+from backend.labs.target import is_authorized_training_target
 
 
 app = FastAPI(
@@ -115,16 +117,59 @@ async def run_scan(scan_id: str):
     scan = scans[scan_id]
 
     try:
-        scanner = TargetTypeAdapter()
-        findings = await scanner.scan(
-            scan["target"],
-            scan.get("target_type", "web"),
-        )
+        target = scan["target"]
+        target_type = scan.get("target_type", "web")
 
-        for finding in findings:
-            add_finding(scan_id, finding)
+        if (
+            target_type == "web"
+            and target.startswith("https://")
+            and is_authorized_training_target(target)
+        ):
+            orchestrator = LabOrchestrator()
+            lab_run = await orchestrator.run([target])
 
-        scan["status"] = "completed"
+            job = next(iter(lab_run.jobs.values()), None)
+
+            if job is not None:
+                scan["lab_run_id"] = lab_run.run_id
+                scan["lab_status"] = job.status.value
+                scan["lab_attempts"] = job.attempts
+                scan["lab_evidence"] = job.evidence
+
+                if job.status.value == "solved":
+                    scan["status"] = "completed"
+                    add_finding(
+                        scan_id,
+                        {
+                            "title": "PortSwigger lab solved",
+                            "severity": "info",
+                            "description": job.last_event or "Lab completed successfully.",
+                            "evidence": str(job.evidence[-1] if job.evidence else ""),
+                            "tool": "lab-orchestrator",
+                        },
+                    )
+                else:
+                    scan["status"] = "completed"
+                    add_finding(
+                        scan_id,
+                        {
+                            "title": "PortSwigger lab not solved",
+                            "severity": "info",
+                            "description": job.error or job.last_event or "Lab orchestration finished without solving the lab.",
+                            "evidence": str(job.evidence[-1] if job.evidence else ""),
+                            "tool": "lab-orchestrator",
+                        },
+                    )
+            else:
+                scan["status"] = "completed"
+        else:
+            scanner = TargetTypeAdapter()
+            findings = await scanner.scan(target, target_type)
+
+            for finding in findings:
+                add_finding(scan_id, finding)
+
+            scan["status"] = "completed"
 
     except Exception as exc:
         scan["status"] = "failed"
